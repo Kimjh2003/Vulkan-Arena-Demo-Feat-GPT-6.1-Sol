@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(arena)
+add_library(arena_engine INTERFACE)
+target_include_directories(arena_engine INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(arena_engine INTERFACE cxx_std_17)
+
+add_library(arena_gameplay INTERFACE)
+target_link_libraries(arena_gameplay INTERFACE arena_engine)
+
+add_library(arena_graphics STATIC gles_renderer.cpp scene_pipeline.cpp gl_capabilities.cpp gl_extensions.cpp compressed_texture.cpp material_texture.cpp etc_gles.cpp frame_output.cpp gl_program.cpp post_processor.cpp astc_gles.cpp)
+set_target_properties(arena_graphics PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(arena_graphics PUBLIC arena_gameplay android log EGL GLESv3)
+
+add_library(arena SHARED native.cpp)
+target_link_libraries(arena PRIVATE arena_gameplay arena_graphics)
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT arena_ipo_supported OUTPUT arena_ipo_error)
+if(arena_ipo_supported)
+    set_property(TARGET arena_graphics arena PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    set_property(TARGET arena_graphics arena PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+endif()
+target_compile_options(arena_graphics PRIVATE -fvisibility=hidden -ffunction-sections -fdata-sections)
+target_compile_options(arena PRIVATE -fvisibility=hidden -ffunction-sections -fdata-sections)
+target_link_options(arena PRIVATE -Wl,--gc-sections)

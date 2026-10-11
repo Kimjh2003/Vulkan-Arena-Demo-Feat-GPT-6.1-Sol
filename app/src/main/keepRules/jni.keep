@@ -1,0 +1,4 @@
+# Preserve only the native entry points and descriptor types needed by JNI.
+-keepclasseswithmembernames,includedescriptorclasses class dev.demo.arena.MainActivity {
+    native <methods>;
+}
