@@ -17,4 +17,3 @@ internal data class HudState @JvmOverloads constructor(
             buffer.getInt(40),buffer.getInt(44)!=0,buffer.getFloat(48))
     }
 }
-
