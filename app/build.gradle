@@ -1,29 +1,111 @@
 plugins {
     id 'com.android.application'
 }
+
+// Keep credentials outside the repository. Missing credentials leave release unsigned.
+def releaseSigningNames = ['ARENA_RELEASE_STORE_FILE', 'ARENA_RELEASE_STORE_PASSWORD',
+                           'ARENA_RELEASE_KEY_ALIAS', 'ARENA_RELEASE_KEY_PASSWORD']
+def releaseSigningValues = releaseSigningNames.collect { providers.environmentVariable(it).orNull }
+def hasReleaseSigning = releaseSigningValues.every { it != null && !it.isEmpty() }
+if (releaseSigningValues.any { it != null } && !hasReleaseSigning) {
+    throw new GradleException('Release signing requires all four ARENA_RELEASE_* environment variables.')
+}
+
+// Lock app compile/runtime graphs, including transitive Kotlin dependencies.
+configurations.configureEach {
+    if (name.endsWith('CompileClasspath') || name.endsWith('RuntimeClasspath')) {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+
+// Audit the artifact R8 actually produced, rather than adding broad keep rules.
+tasks.register('verifyBenchmarkOptimization') {
+    group = 'verification'
+    description = 'Checks optimized JNI boundaries, native payload and runtime dependency inventory.'
+    dependsOn 'assembleBenchmark'
+    doLast {
+        def reportDir = layout.buildDirectory.dir('outputs/mapping/benchmark').get().asFile
+        def mapping = new File(reportDir, 'mapping.txt').getText('UTF-8')
+        def configuration = new File(reportDir, 'configuration.txt').getText('UTF-8')
+        if (!mapping.contains('dev.demo.arena.NativeBridge -> dev.demo.arena.NativeBridge:') ||
+            mapping.contains('dev.demo.arena.NativeDiagnostics')) {
+            throw new GradleException('Unexpected optimized JNI class boundary')
+        }
+        if (configuration =~ /(?m)^-dont(?:optimize|shrink|obfuscate)\b/) {
+            throw new GradleException('Global R8 optimization disable found')
+        }
+        def apk = layout.buildDirectory.file('outputs/apk/benchmark/app-benchmark.apk').get().asFile
+        new java.util.zip.ZipFile(apk).withCloseable { zip ->
+            def nativeFiles = zip.entries().findAll { it.name.startsWith('lib/') && it.name.endsWith('.so') }
+                .collect { it.name }.toSet()
+            def expected = ['lib/arm64-v8a/libarena.so', 'lib/x86_64/libarena.so'].toSet()
+            if (nativeFiles != expected) throw new GradleException("Unexpected native payload: ${nativeFiles}")
+            logger.lifecycle("Optimized APK: ${apk.length()} bytes; DEX: ${zip.getEntry('classes.dex').size} bytes")
+        }
+        def modules = configurations.benchmarkRuntimeClasspath.incoming.artifacts.artifacts
+            .collect { it.id.componentIdentifier.displayName }.unique().sort()
+        def summary = layout.buildDirectory.file('reports/optimization/benchmark.json').get().asFile
+        summary.parentFile.mkdirs()
+        summary.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            apkBytes: apk.length(), runtimeDependencies: modules,
+            mapping: new File(reportDir, 'mapping.txt').absolutePath,
+            diagnosticsExcluded: true
+        ])), 'UTF-8')
+        logger.lifecycle("Runtime dependencies: ${modules}")
+        logger.lifecycle('R8 JNI boundary and optimized native payload checks passed')
+    }
+}
 android {
     namespace 'dev.demo.arena'
     compileSdk 37
     ndkVersion '30.0.15729638'
+    signingConfigs {
+        debug {
+            enableV1Signing = false
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+        if (hasReleaseSigning) {
+            create('production') {
+                storeFile rootProject.file(releaseSigningValues[0])
+                storePassword releaseSigningValues[1]
+                keyAlias releaseSigningValues[2]
+                keyPassword releaseSigningValues[3]
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
     defaultConfig {
         applicationId 'dev.demo.arena'
         minSdk 28
         targetSdk 37
-        versionCode 1
-        versionName '0.1'
+        versionCode 2
+        versionName '0.2-vulkan'
         testInstrumentationRunner 'dev.demo.arena.ControlsInstrumentation'
         ndk { abiFilters 'arm64-v8a', 'x86_64' }
-        externalNativeBuild { cmake { cppFlags '-std=c++17 -Wall -Wextra' } }
+        externalNativeBuild { cmake { cppFlags '-std=c++17 -Wall -Wextra'; arguments '-DANDROID_STL=c++_static' } }
     }
     buildTypes {
         release {
             optimization { enable = true }
+            if (hasReleaseSigning) signingConfig signingConfigs.production
         }
         benchmark {
             initWith release
             signingConfig signingConfigs.debug
             matchingFallbacks = ['release']
             debuggable false
+        }
+        profile {
+            initWith benchmark
+            // GFXR needs a debuggable APK; native NDEBUG excludes validation-only
+            // extensions which Sokatoa strips layers for during replay.
+            debuggable true
+            jniDebuggable false
+            optimization { enable = true }
+            externalNativeBuild { cmake { arguments '-DCMAKE_BUILD_TYPE=RelWithDebInfo' } }
         }
     }
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '4.1.2' } }

@@ -11,6 +11,11 @@ struct GameSession {
     float age = 0;
     int score = 0;
     ProgressionSystem progression;
+    void reserveRuntimeMemory() {
+        enemySystem.enemies.reserve(120);enemySystem.shots.reserve(120);
+        combat.bullets.reserve(128);combat.hostileBullets.reserve(240);
+        effects.particles.reserve(160);
+    }
     bool upgrading() const noexcept {return progression.paused();}
     bool chooseUpgrade(int choice) {return progression.choose(choice,player,combat);}
     void checkWave() {progression.advance(age,gameOver() || victory(),enemySystem,combat);}

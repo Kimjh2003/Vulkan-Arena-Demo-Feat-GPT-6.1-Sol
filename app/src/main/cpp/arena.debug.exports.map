@@ -1,0 +1,10 @@
+{
+    global:
+        Java_dev_demo_arena_NativeBridge_start;
+        Java_dev_demo_arena_NativeBridge_prepare;
+        Java_dev_demo_arena_NativeBridge_frame;
+        Java_dev_demo_arena_NativeBridge_stop;
+        Java_dev_demo_arena_NativeDiagnostics_renderedFrames;
+        Java_dev_demo_arena_NativeDiagnostics_rendererGeneration;
+    local: *;
+};

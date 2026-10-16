@@ -2,6 +2,7 @@
 #include "../app/src/main/cpp/camera3d.h"
 #include "../app/src/main/cpp/scene_builder.h"
 #include "../app/src/main/cpp/hud_presenter.h"
+#include "../app/src/main/cpp/frame_state.h"
 #include <cassert>
 #include <iostream>
 int main() {
@@ -15,6 +16,15 @@ int main() {
     shot.update(0,0,0,false);assert(shot.score==10 && shot.enemySystem.enemies.empty() && shot.combat.bullets.empty());
     Game dead;dead.player.hp=0;dead.update(1,1,1,true);assert(dead.age==0 && dead.player.x==.5f);
     for(auto box:SceneBuilder::build(a)) assert(std::isfinite(box.x) && std::isfinite(box.z) && box.w>0 && box.h>0 && box.d>0);
+    std::vector<Box> fixed,moving,joined;SceneBuilder::buildStatic(fixed);SceneBuilder::buildDynamic(a,moving);
+    joined=fixed;joined.insert(joined.end(),moving.begin(),moving.end());
+    auto original=SceneBuilder::build(a);assert(original.size()==joined.size());
+    for(size_t i=0;i<original.size();++i){const auto& x=original[i];const auto& y=joined[i];
+        assert(x.x==y.x&&x.y==y.y&&x.z==y.z&&x.w==y.w&&x.h==y.h&&x.d==y.d&&
+            x.r==y.r&&x.g==y.g&&x.b==y.b&&x.yaw==y.yaw&&x.textured==y.textured&&x.emissive==y.emissive);}
+    a.player.dashCooldown=1.234567f;FrameState wire;wire.capture(a);
+    float dashValue=0;std::memcpy(&dashValue,&wire.values[12],4);
+    assert(wire.values[0]==a.score&&wire.values[3]==a.player.hp&&dashValue==a.player.dashCooldown);
     auto center=Camera3D::screenToGround(.5f,.5f,16.f/9.f);
     assert(std::abs(center.x-.5f)<.0001f && std::abs(center.z-.5f)<.0001f);
     auto right=Camera3D::screenToGround(.6f,.5f,16.f/9.f);

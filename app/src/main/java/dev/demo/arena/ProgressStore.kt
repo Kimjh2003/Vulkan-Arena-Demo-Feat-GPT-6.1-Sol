@@ -13,6 +13,6 @@ internal class ProgressStore(context: Context) {
     }
     fun summary(): String {
         val seconds=prefs.getInt("seconds",0)
-        return "최고 점수 ${prefs.getInt("score",0)} · 최장 생존 %02d:%02d · 성공 ${prefs.getInt("wins",0)}회".format(seconds/60,seconds%60)
+        return "최고 점수 ${prefs.getInt("score",0)} · 최장 생존 ${UiText.clock(seconds)} · 성공 ${prefs.getInt("wins",0)}회"
     }
 }

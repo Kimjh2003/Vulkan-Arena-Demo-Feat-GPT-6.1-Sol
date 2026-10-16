@@ -4,26 +4,6 @@ import android.content.Context
 import android.graphics.Typeface
 import android.widget.LinearLayout
 import android.widget.TextView
-import org.json.JSONObject
-import java.util.Locale
-
-internal data class HudState @JvmOverloads constructor(
-    val score: Int, val ammo: Int, val magazine: Int, val hp: Int,
-    val seconds: Int, val wave: Int, val manual: Boolean,
-    val reloading: Boolean, val ended: Boolean, val victory: Boolean,
-    val weapon: Int = 0, val upgrading: Boolean = false, val dash: Float = 0f
-) {
-    companion object {
-        fun parse(payload: String): HudState {
-            val json = JSONObject(payload)
-            return HudState(json.getInt("score"), json.getInt("ammo"), json.getInt("magazine"),
-                json.getInt("hp"), json.getInt("seconds"), json.getInt("wave"),
-                json.getBoolean("manual"), json.getBoolean("reloading"),
-                json.getBoolean("ended"), json.getBoolean("victory"),json.optInt("weapon",0),
-                json.optBoolean("upgrading",false),json.optDouble("dash",0.0).toFloat())
-        }
-    }
-}
 
 /** Small corner readout; no full-width status bar. */
 internal class GameHud(context: Context) : LinearLayout(context) {
@@ -57,17 +37,29 @@ internal class GameHud(context: Context) : LinearLayout(context) {
     private fun dp(value: Int) = ArenaTheme.dp(context, value)
     fun show(state: HudState) {
         if (state == lastState) return
-        lastState = state
-        val time = String.format(Locale.ROOT, "%02d:%02d", state.seconds / 60, state.seconds % 60)
-        primary.text = "점수 ${state.score}  ·  $time"
-        ammo.text = "탄약 ${state.ammo}/${state.magazine}"
-        ammo.setTextColor(if (state.reloading || state.ammo <= 3) ArenaTheme.warning else ArenaTheme.info)
-        health.text = "체력 ${state.hp}/5"
-        health.setTextColor(if (state.hp <= 2) ArenaTheme.danger else ArenaTheme.success)
-        detail.text = "${weaponNames[state.weapon.coerceIn(0,2)]} · 웨이브 ${state.wave}/5 · ${if (state.manual) "수동" else "자동"}"
-        message.visibility = if (state.reloading && !state.ended && !state.victory) VISIBLE else GONE
-        message.text = "재장전 중…"
-        contentDescription = "${primary.text}, ${ammo.text}, ${health.text}, ${detail.text}"
+        val previous=lastState
+        lastState=state
+        var labelsChanged=false
+        if(previous==null || previous.score!=state.score || previous.seconds!=state.seconds) {
+            primary.text="점수 ${state.score}  ·  ${UiText.clock(state.seconds)}"; labelsChanged=true
+        }
+        if(previous==null || previous.ammo!=state.ammo || previous.magazine!=state.magazine) {
+            ammo.text="탄약 ${state.ammo}/${state.magazine}"; labelsChanged=true
+        }
+        if(previous==null || previous.reloading!=state.reloading || previous.ammo!=state.ammo)
+            ammo.setTextColor(if(state.reloading || state.ammo<=3) ArenaTheme.warning else ArenaTheme.info)
+        if(previous==null || previous.hp!=state.hp) {
+            health.text="체력 ${state.hp}/5"
+            health.setTextColor(if(state.hp<=2) ArenaTheme.danger else ArenaTheme.success); labelsChanged=true
+        }
+        if(previous==null || previous.weapon!=state.weapon || previous.wave!=state.wave || previous.manual!=state.manual) {
+            detail.text="${weaponNames[state.weapon.coerceIn(0,2)]} · 웨이브 ${state.wave}/5 · ${if(state.manual) "수동" else "자동"}"; labelsChanged=true
+        }
+        if(previous==null || previous.reloading!=state.reloading || previous.ended!=state.ended || previous.victory!=state.victory) {
+            message.visibility=if(state.reloading && !state.ended && !state.victory) VISIBLE else GONE
+            message.text="재장전 중…"
+        }
+        if(labelsChanged) contentDescription="${primary.text}, ${ammo.text}, ${health.text}, ${detail.text}"
     }
     fun showError(error: String) {
         message.visibility = VISIBLE

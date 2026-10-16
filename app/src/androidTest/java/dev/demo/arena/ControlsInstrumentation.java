@@ -11,12 +11,20 @@ import android.content.Intent;
 import android.app.Activity;
 import android.widget.TextView;
 import java.util.concurrent.Callable;
+import android.view.SurfaceView;
 
 /** Framework-only integration checks; no test-library dependency. */
 public final class ControlsInstrumentation extends Instrumentation {
     @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
     private static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
+    }
+    private static Thread renderOwner() {
+        Thread owner=null;
+        for(Thread t:Thread.getAllStackTraces().keySet()) if(t.isAlive() && t.getName().equals("ArenaRenderer")) {
+            check(owner==null,"Overlapping render workers");owner=t;
+        }
+        check(owner!=null,"Missing render worker");return owner;
     }
     private static View findText(View view, String text) {
         if(view instanceof TextView && ((TextView)view).getText().toString().equals(text)) return view;
@@ -38,6 +46,33 @@ public final class ControlsInstrumentation extends Instrumentation {
             SystemClock.sleep(100);
         }
         throw new AssertionError(failure);
+    }
+    private static SurfaceView findSurface(View view) {
+        if(view instanceof SurfaceView) return (SurfaceView)view;
+        if(view instanceof ViewGroup) {
+            ViewGroup group=(ViewGroup)view;
+            for(int i=0;i<group.getChildCount();i++) {
+                SurfaceView found=findSurface(group.getChildAt(i));if(found!=null)return found;
+            }
+        }
+        return null;
+    }
+    private void awaitFrames(boolean active) throws Exception {
+        long deadline=SystemClock.uptimeMillis()+120000;
+        while(SystemClock.uptimeMillis()<deadline) {
+            long frames=NativeDiagnostics.INSTANCE.renderedFrames();
+            if(active?frames>=3:frames==0)return;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError(active?"Vulkan did not present three frames":"Paused renderer remained active");
+    }
+    private void awaitGeneration(long previous) throws Exception {
+        long deadline=SystemClock.uptimeMillis()+120000;
+        while(SystemClock.uptimeMillis()<deadline) {
+            if(NativeDiagnostics.INSTANCE.rendererGeneration()>previous)return;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("Surface change did not recreate the Vulkan renderer");
     }
     private static MotionEvent event(int action, int[] ids, float[] xs, float[] ys) {
         MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[ids.length];
@@ -67,6 +102,9 @@ public final class ControlsInstrumentation extends Instrumentation {
                 TouchInput input=new TouchInput();
                 send(input,view,manual,MotionEvent.ACTION_DOWN,new int[]{7},new float[]{460},new float[]{790});
                 check(input.getCurrent().getMoveX()>.5f,"Movement stick did not engage");
+                InputFrame original=input.getCurrent();
+                send(input,view,manual,MotionEvent.ACTION_MOVE,new int[]{7},new float[]{460},new float[]{790});
+                check(input.getCurrent()==original,"Identical input allocated another snapshot");
                 send(input,view,manual,MotionEvent.ACTION_POINTER_DOWN | (1<<8),
                      new int[]{7,13},new float[]{460,1640},new float[]{790,650});
                 check(input.getCurrent().getShooting() && input.getCurrent().getAimZ()<-.9f,
@@ -100,7 +138,24 @@ public final class ControlsInstrumentation extends Instrumentation {
                     check(saved.getManualAim() && saved.getLeftHanded() && !saved.getSound(),
                           "Settings roundtrip failed");
                 } finally {store.save(before);}
-                HudState state=HudState.Companion.parse("{\"score\":120,\"ammo\":0,\"magazine\":12,\"hp\":2,\"seconds\":65,\"wave\":2,\"manual\":true,\"reloading\":true,\"ended\":false,\"victory\":false}");
+                java.nio.ByteBuffer wire=java.nio.ByteBuffer.allocateDirect(56).order(java.nio.ByteOrder.nativeOrder());
+                int[] fields={120,0,12,2,65,2,1,1,0,0,2,1,0,3};
+                for(int i=0;i<fields.length;i++) wire.putInt(i*4,fields[i]);
+                wire.putFloat(48,1.234567f);
+                HudState state=HudState.Companion.read(wire);
+                check(state.getWeapon()==2 && state.getUpgrading() && state.getDash()==1.234567f,
+                      "Binary HUD state lost optional fields or float precision");
+
+                NativeStateBuffer buffered=new NativeStateBuffer();
+                for(int i=0;i<14;i++) buffered.getBytes().putInt(i*4,wire.getInt(i*4));
+                check(buffered.changedSnapshot().getDash()==1.234567f,"Snapshot changed float precision");
+                check(buffered.changedSnapshot()==null,"Identical wire state republished");
+                buffered.getBytes().putInt(52,99);
+                check(buffered.getEvents()==99 && buffered.changedSnapshot()==null,"Audio events forced UI publication");
+                buffered.getBytes().putInt(0,121);
+                check(buffered.changedSnapshot().getScore()==121,"Changed score was dropped");
+                check(UiText.INSTANCE.clock(181).equals("03:01"),"Shared clock formatting failed");
+                check(UiText.INSTANCE.dash(12).equals("대시 1.2"),"Dash formatting failed");
                 GameHud hud=new GameHud(getTargetContext());hud.show(state);
                 check(findText(hud,"점수 120  ·  01:05")!=null && findText(hud,"탄약 0/12")!=null,
                       "Structured HUD values were not displayed");
@@ -142,17 +197,52 @@ public final class ControlsInstrumentation extends Instrumentation {
                 } catch(Throwable error) {uiFailure[0]=error;}
             });
             if(uiFailure[0]!=null) throw uiFailure[0];
+
+            final int[] deliveries={0}; final HudState[] delivered={null};
+            final StateMailbox[] mailbox={null};
+            HudState first=new HudState(1,12,12,5,0,1,false,false,false,false);
+            HudState latest=new HudState(2,12,12,5,0,1,false,false,false,false);
+            runOnMainSync(() -> {
+                mailbox[0]=new StateMailbox(value -> { deliveries[0]++;delivered[0]=value;return kotlin.Unit.INSTANCE; });
+                mailbox[0].offer(first);mailbox[0].offer(latest);
+            });
+            waitForIdleSync();
+            check(deliveries[0]==1 && delivered[0]==latest,"Mailbox did not coalesce pending UI states");
+            runOnMainSync(() -> {mailbox[0].offer(first);mailbox[0].close();});
+            waitForIdleSync();
+            check(deliveries[0]==1,"Closed round delivered stale UI state");
             Activity activity=startActivitySync(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             awaitUi(() -> findText(activity.getWindow().getDecorView(),"플레이")!=null,"Home play action missing");
             runOnMainSync(() -> findText(activity.getWindow().getDecorView(),"플레이").performClick());
+            // SurfaceView may gain focus only after its first buffer is ready.
+            // Cold software-GPU initialization uses the existing frame deadline;
+            // still require both actual Vulkan frames and window focus.
+            awaitFrames(true);
             awaitUi(() -> findText(activity.getWindow().getDecorView(),"다시 하기")!=null && activity.hasWindowFocus(),"Gameplay did not gain focus");
+            long initialGeneration=NativeDiagnostics.INSTANCE.rendererGeneration();
+            Thread initialOwner=renderOwner();
+            runOnMainSync(() -> findSurface(activity.getWindow().getDecorView()).getHolder().setFixedSize(960,540));
+            awaitGeneration(initialGeneration);
+            awaitFrames(true);
+            check(renderOwner()==initialOwner,"Resize replaced the simulation/render owner");
+            long resizedGeneration=NativeDiagnostics.INSTANCE.rendererGeneration();
+            runOnMainSync(() -> findSurface(activity.getWindow().getDecorView()).getHolder().setSizeFromLayout());
+            awaitGeneration(resizedGeneration);
+            awaitFrames(true);
+            check(renderOwner()==initialOwner,"Surface restoration replaced the render owner");
+            runOnMainSync(() -> activity.moveTaskToBack(true));
+            awaitFrames(false);
+            getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            awaitFrames(true);
+            renderOwner();
             waitForIdleSync();
             sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);waitForIdleSync();
             awaitUi(() -> !activity.isFinishing() && findText(activity.getWindow().getDecorView(),"플레이")!=null,
                     "Gameplay Back did not return to home");
             sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);waitForIdleSync();
             awaitUi(() -> activity.isFinishing() || activity.isDestroyed(),"Home Back did not finish the activity");
-            results.putString("stream","Integration checks passed: controls, settings, HUD, gameplay Back, home exit.\n");
+            results.putString("stream","Integration checks passed: controls, settings, HUD, Vulkan frames, resize, pause/resume, gameplay Back, home exit.\n");
             finish(-1,results);
         } catch(Throwable failure) {
             results.putString("stream","FAILED: "+failure+"\n");finish(1,results);

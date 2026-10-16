@@ -1,69 +1,55 @@
 #include <android/native_window_jni.h>
-#include <jni.h>
 #include <android/log.h>
+#include <jni.h>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
-#include <string>
-#include "gameplay/game_session.h"
-#include "scene_builder.h"
-#include "hud_presenter.h"
-#include "gles_renderer.h"
+#include "game_runtime.h"
 
-static std::mutex g_mutex;
-static std::unique_ptr<GlesRenderer> g_renderer;
-static GameSession g_game;
-static std::vector<Box> g_sceneCache;
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_dev_demo_arena_MainActivity_start(JNIEnv* env, jobject, jobject surface,jboolean manual,jint weapon,jint texturePreference) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_renderer.reset();
-    g_game = GameSession{};
-    g_game.manualAim=manual;g_game.combat.equip(weapon);
-    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
-    try {
-        g_renderer = std::make_unique<GlesRenderer>(window,graphics::OutputPath::Direct,texturePreference);
-        ANativeWindow_release(window);
-        return env->NewStringUTF("");
-    } catch (const std::exception& e) {
-        if (window) {
-            ANativeWindow_release(window);
-        }
-        __android_log_print(ANDROID_LOG_ERROR, "Arena", "Initialization error: %s", e.what());
-        return env->NewStringUTF("Unable to start the game. Back to retry.");
-    }
+namespace {
+GameRuntime runtime;
+struct ReleaseWindow {
+    void operator()(ANativeWindow* window)const noexcept {if(window)ANativeWindow_release(window);}
+};
+template<class Action>jint status(const char* operation,Action&& action)noexcept {
+    try {return action();}
+    catch(const std::exception& error){
+        __android_log_print(ANDROID_LOG_ERROR,"ArenaVulkan","%s: %s",operation,error.what());
+    }catch(...){__android_log_print(ANDROID_LOG_ERROR,"ArenaVulkan","%s: unknown native failure",operation);}
+    return -1;
 }
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_dev_demo_arena_MainActivity_frame(JNIEnv* env, jobject,jfloat dt,jfloat moveX,jfloat moveZ,
-                                      jfloat aimX,jfloat aimZ,jboolean shooting,jboolean dash,jint upgrade) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    try {
-        if (!g_renderer) {
-            throw std::runtime_error("Renderer unavailable");
-        }
-        g_game.chooseUpgrade(upgrade);
-        if(dash && !g_game.upgrading() && !g_game.gameOver() && !g_game.victory()) g_game.player.dash(moveX,moveZ);
-        g_game.updateControls(dt,moveX,moveZ,aimX,aimZ,shooting);
-        g_renderer->setCameraShake(g_game.effects.shake);
-        g_renderer->beginFrame(0.025f, 0.035f, 0.065f);
-        SceneBuilder::build(g_game,g_sceneCache);
-        for (const auto& box : g_sceneCache) {
-            g_renderer->drawBox(box);
-        }
-        g_renderer->endFrame();
-
-        const auto text = HudPresenter::state(g_game)+"|"+std::to_string(g_game.effects.events);
-        return env->NewStringUTF(text.c_str());
-    } catch (const std::exception& e) {
-        __android_log_print(ANDROID_LOG_ERROR, "Arena", "Frame error: %s", e.what());
-        return env->NewStringUTF("ERROR: Game interrupted. Back to retry.");
-    }
 }
-
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_demo_arena_NativeBridge_start(JNIEnv* env,jobject,jobject surface,jboolean manual,jint weapon,jint texturePreference){
+    const auto result=status("Initialization",[&]{
+        if(!surface)throw std::invalid_argument("Missing Android surface");
+        std::unique_ptr<ANativeWindow,ReleaseWindow> window(ANativeWindow_fromSurface(env,surface));
+        runtime.start(window.get(),manual,weapon,texturePreference);
+        return 0;
+    });
+    if(env->ExceptionCheck())return nullptr;
+    return env->NewStringUTF(result==0?"":"Unable to start the game. Back to retry.");
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_demo_arena_NativeBridge_prepare(JNIEnv*,jobject){
+    return status("Prepare",[]{return runtime.prepare();});
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_demo_arena_NativeBridge_frame(JNIEnv* env,jobject,jfloat dt,jfloat moveX,jfloat moveZ,
+    jfloat aimX,jfloat aimZ,jboolean shooting,jboolean dash,jint upgrade,jobject stateBuffer){
+    return status("Frame",[&]{
+        if(!stateBuffer)throw std::invalid_argument("Missing direct frame-state buffer");
+        void* output=env->GetDirectBufferAddress(stateBuffer);
+        if(!output||env->GetDirectBufferCapacity(stateBuffer)<static_cast<jlong>(FrameState::words*sizeof(std::int32_t)))
+            throw std::invalid_argument("Invalid direct frame-state buffer");
+        runtime.frame(FrameInput{dt,moveX,moveZ,aimX,aimZ,bool(shooting),bool(dash),upgrade},output);
+        return 0;
+    });
+}
 extern "C" JNIEXPORT void JNICALL
-Java_dev_demo_arena_MainActivity_stop(JNIEnv*, jobject) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_renderer.reset();
-}
+Java_dev_demo_arena_NativeBridge_stop(JNIEnv*,jobject){runtime.stop();}
+#ifndef NDEBUG
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_demo_arena_NativeDiagnostics_renderedFrames(JNIEnv*,jobject){return runtime.renderedFrames();}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_demo_arena_NativeDiagnostics_rendererGeneration(JNIEnv*,jobject){return runtime.generation();}
+#endif

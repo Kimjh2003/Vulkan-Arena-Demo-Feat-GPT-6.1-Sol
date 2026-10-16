@@ -29,3 +29,17 @@ checkout is excluded from this repository.
 
 The previous ASTC adaptation retains its Apache-2.0 notice in
 `app/src/main/assets/licenses/ASTC-Apache-2.0.txt`.
+
+## Vulkan rendering API input
+
+The user supplied `vulkan-arena-api.zip` as the migration input. Its rendering API,
+shaders and contract are adapted in `app/src/main/cpp/vulkan`. Local adaptations
+include persistent mapping, in-place reusable instance batches, cached limits,
+conditional descriptor updates and static vertex staging. The supplied archive
+has no standalone license file; no new license is inferred for that input.
+
+## Frame pacing evaluation
+
+Swappy 2.1.3 was evaluated during migration. The final app uses Android's built-in
+Choreographer and direct Vulkan presentation; Swappy and its Maven/Prefab binary
+are not included. Validation binaries used for local testing are not packaged.

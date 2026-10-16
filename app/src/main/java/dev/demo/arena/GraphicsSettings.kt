@@ -11,7 +11,7 @@ internal class GraphicsSettings(context: Context) {
 internal object GraphicsPicker {
     fun show(context: Context, store: GraphicsSettings) {
         val dialog=ArenaDialog(context,"그래픽 설정","다음 전투에 적용 · 미지원 형식은 자동 대체")
-        dialog.choices(listOf("자동 · 지원되는 형식 선택","ETC1 · RGB","ETC2 · RGB","ASTC · 4×4"),store.textureFamily) {
+        dialog.choices(listOf("자동 · 지원되는 형식 선택","ETC1 데이터 · ETC2 호환 경로","ETC2 · RGB","ASTC · 4×4"),store.textureFamily) {
             store.textureFamily=it
         }
         dialog.action("닫기") {dialog.dismiss()}

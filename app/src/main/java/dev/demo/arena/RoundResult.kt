@@ -7,7 +7,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.util.Locale
 
 /** Modal round summary blocks movement touches until the player chooses an action. */
 internal class RoundResult(context: Context, retry: () -> Unit, home: () -> Unit) : FrameLayout(context) {
@@ -46,7 +45,7 @@ internal class RoundResult(context: Context, retry: () -> Unit, home: () -> Unit
     fun show(state: HudState) {
         title.text = if (state.victory) "생존 성공!" else "게임 오버"
         title.setTextColor(if (state.victory) ArenaTheme.success else ArenaTheme.danger)
-        val time = String.format(Locale.ROOT, "%02d:%02d", state.seconds / 60, state.seconds % 60)
+        val time = UiText.clock(state.seconds)
         summary.text = "최종 점수 ${state.score}\n생존 시간 $time · 웨이브 ${state.wave}/5"
         visibility = VISIBLE
     }

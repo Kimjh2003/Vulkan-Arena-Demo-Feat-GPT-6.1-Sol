@@ -10,8 +10,12 @@ struct SceneBuilder {
         return out;
     }
     static void build(const GameSession& game,std::vector<Box>& out) {
+        buildStatic(out);
+        appendDynamic(game,out);
+    }
+    static void buildStatic(std::vector<Box>& out) {
         out.clear();
-        out.reserve(80 + game.enemySystem.enemies.size() + game.combat.bullets.size());
+        out.reserve(80);
         out.push_back({-4.f,-.18f,-4.f,8.f,.18f,8.f,.07f,.12f,.19f});
         out.back().textured=true;
         for (int i=1;i<20;i++) {
@@ -23,13 +27,21 @@ struct SceneBuilder {
         out.push_back({-4.04f,0,3.96f,8.08f,.15f,.08f,.19f,.34f,.44f});
         out.push_back({-4.04f,0,-4.f,.08f,.15f,8.f,.19f,.34f,.44f});
         out.push_back({3.96f,0,-4.f,.08f,.15f,8.f,.19f,.34f,.44f});
-        auto world=[](float p) { return World::toWorld(p); };
         for(const auto& cover:World::cover) {
             const float w=cover.max.x-cover.min.x,d=cover.max.z-cover.min.z;
             out.push_back({cover.min.x-.05f,.008f,cover.min.z-.05f,w+.1f,.01f,d+.1f,.025f,.04f,.06f});
             out.push_back({cover.min.x,0,cover.min.z,w,cover.max.y,d,.30f,.38f,.44f});
             out.push_back({cover.min.x,cover.max.y,cover.min.z,w,.025f,d,.47f,.58f,.62f});
         }
+    }
+    template<class Output>
+    static void buildDynamic(const GameSession& game,Output& out) {
+        out.clear();
+        appendDynamic(game,out);
+    }
+    template<class Output>
+    static void appendDynamic(const GameSession& game,Output& out) {
+        auto world=[](float p) { return World::toWorld(p); };
         for (const auto& e:game.enemySystem.enemies) {
             const auto color=e.flash>0?engine::Vec3{1,1,1}:
                 e.kind==EnemyKind::Charger?engine::Vec3{1,.58f,.09f}:
@@ -44,12 +56,10 @@ struct SceneBuilder {
             }
         }
         for (const auto& b:game.combat.bullets) {
-            out.push_back({world(b.x)-.055f,.18f,world(b.z)-.055f,.11f,.11f,.11f,1.f,.82f,.20f});
-            out.back().emissive=.8f;
+            out.push_back({world(b.x)-.055f,.18f,world(b.z)-.055f,.11f,.11f,.11f,1.f,.82f,.20f,0,false,.8f});
         }
         for(const auto& b:game.combat.hostileBullets) {
-            out.push_back({world(b.x)-.06f,.28f,world(b.z)-.06f,.12f,.12f,.12f,.9f,.12f,1});
-            out.back().emissive=.8f;
+            out.push_back({world(b.x)-.06f,.28f,world(b.z)-.06f,.12f,.12f,.12f,.9f,.12f,1,0,false,.8f});
         }
         const float px=world(game.player.x),pz=world(game.player.z);
         const float dx=game.combat.directionX,dz=game.combat.directionZ;
@@ -66,8 +76,7 @@ struct SceneBuilder {
         for(const auto& p:game.effects.particles) {
             const float size=p.size*(p.life/p.duration);
             out.push_back({p.position.x-size*.5f,std::max(.02f,p.position.y),p.position.z-size*.5f,
-                           size,size,size,p.color.x,p.color.y,p.color.z});
-            out.back().emissive=.5f;
+                           size,size,size,p.color.x,p.color.y,p.color.z,0,false,.5f});
         }
         if (game.player.alive() && (game.combat.hasTarget || game.manualAim)) {
             float ax=world(game.combat.aimX), az=world(game.combat.aimZ);
